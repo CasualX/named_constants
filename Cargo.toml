@@ -1,0 +1,15 @@
+[package]
+name = "named_constants"
+version = "0.1.0"
+edition = "2018"
+license = "MIT"
+
+authors = ["Casper <CasualX@users.noreply.github.com>"]
+description = "Procedural macro makes enums behave like named constants in languages like C/C++ or C#."
+documentation = "https://docs.rs/named_constants"
+repository = "https://github.com/CasualX/named_constants"
+readme = "readme.md"
+keywords = ["enum", "const", "named", "constant"]
+
+[lib]
+proc-macro = true
