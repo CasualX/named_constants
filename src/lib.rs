@@ -8,6 +8,23 @@ use std::iter::FromIterator;
 /// Put this attribute on an enum and it will be rewritten as a newtype struct.
 /// The enum variants are turned into associated constants.
 ///
+/// # Derives
+///
+/// When adding the `Reflection` derive additional methods are provided:
+///
+/// * `_str(&self) -> Option<&'static str>`: Converts the named value into a string literal if valid.
+/// * `_is_defined(&self) -> bool`: Returns if the value is a named constant.
+/// * `_names() -> &'static [&'static str]`: Returns a slice with the names of the named constants.
+/// * `_values() -> &'static [Self]`: Returns a slice with the values of the named constants.
+///
+/// These methods are non-public and start with an underscore to prevent potential collisions with the named constants.
+///
+/// Additionally, when the `Reflection` derive is added the following derives are handled specially:
+///
+/// * `Debug`: Implement `fmt::Debug` displaying the name of the constant if defined otherwise its numerical value.
+/// * `Display`: Implement `fmt::Display` displaying the name of the constant if defined otherwise its numerical value.
+/// * `FromStr`: Implement `str::FromStr` supporting parsing from name and falls back to parsing the underlying type.
+///
 /// # Examples
 ///
 /// ```
@@ -15,7 +32,7 @@ use std::iter::FromIterator;
 ///
 /// #[named_constants]
 /// // Derives are applied to the newtype wrapper
-/// #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+/// #[derive(Copy, Clone, Debug, Eq, PartialEq, Reflection)]
 /// // Required repr to specify the underlying type
 /// #[repr(i32)]
 /// pub enum CardSuit {
@@ -108,6 +125,7 @@ struct Derives {
 	reflection: bool,
 	debug: bool,
 	from_str: bool,
+	display: bool,
 }
 struct Visibility {
 	keyword: Option<Ident>,
@@ -202,7 +220,7 @@ fn parse_constants(stream: TokenStream) -> Vec<Constant> {
 		let key = match tokens.pop() {
 			Some(TokenTree::Ident(key)) => key,
 			None => break,
-			_ => panic!("expected a list of constants `KEY $(= VALUE,)?`")
+			_ => panic!("expected a comma-separated list of constants `KEY` or `KEY = VALUE`")
 		};
 
 		let value = match tokens.pop() {
@@ -219,7 +237,7 @@ fn parse_constants(stream: TokenStream) -> Vec<Constant> {
 				Some(TokenStream::from_iter(value))
 			},
 			None => None,
-			_ => panic!("expected a list of constants `KEY $(= VALUE,)?`")
+			_ => panic!("expected a comma-separated list of constants `KEY` or `KEY = VALUE`")
 		};
 
 		constants.push(Constant { attributes, key, value })
@@ -240,7 +258,7 @@ fn parse_named(stream: TokenStream) -> NamedConstants {
 			}
 			match group.delimiter() {
 				Delimiter::Brace => (),
-				_ => panic!("named constants must use { } to declare the constants"),
+				_ => panic!("named constants must use {{ }} to declare the constants"),
 			}
 			let constants = parse_constants(group.stream());
 			NamedConstants {
@@ -271,11 +289,12 @@ fn rewrite_repr(attributes: &mut Vec<TokenStream>) -> Option<TokenStream> {
 	}
 	repr_type
 }
-// Rewrite #[derive(..)] looking for Reflection, Debug and FromStr
+// Rewrite #[derive(..)] looking for Reflection and related derives
 fn rewrite_derives(attributes: &mut Vec<TokenStream>) -> Derives {
 	let mut reflection = false;
 	let mut debug = false;
 	let mut from_str = false;
+	let mut display = false;
 	for meta in attributes {
 		let tokens = to_vec(meta.clone());
 		match &tokens[..] {
@@ -289,6 +308,7 @@ fn rewrite_derives(attributes: &mut Vec<TokenStream>) -> Derives {
 								"Reflection" => reflection = true,
 								"Debug" => debug = true,
 								"FromStr" => from_str = true,
+								"Display" => display = true,
 								_ => return true,
 							}
 							false
@@ -302,12 +322,13 @@ fn rewrite_derives(attributes: &mut Vec<TokenStream>) -> Derives {
 				else {
 					debug = false;
 					from_str = false;
+					display = false;
 				}
 			},
 			_ => (),
 		}
 	}
-	Derives { reflection, debug, from_str }
+	Derives { reflection, debug, from_str, display }
 }
 
 //================================================================
@@ -439,7 +460,19 @@ fn render_reflection(tokens: &mut Vec<TokenTree>, name: &Ident, constants: &[Con
 					render_string(tokens, "_ => ::core::option::Option::None,");
 				});
 			});
-			render_string(tokens, "const fn _keys() -> &'static [&'static str]");
+			render_string(tokens, "const fn _is_defined(&self) -> bool");
+			render_group(tokens, Delimiter::Brace, |tokens| {
+				render_string(tokens, "match self");
+				render_group(tokens, Delimiter::Brace, |tokens| {
+					for constant in constants {
+						render_string(tokens, "&Self::");
+						tokens.push(TokenTree::Ident(constant.key.clone()));
+						render_string(tokens, "=> true,");
+					}
+					render_string(tokens, "_ => false,");
+				});
+			});
+			render_string(tokens, "const fn _names() -> &'static [&'static str]");
 			render_group(tokens, Delimiter::Brace, |tokens| {
 				tokens.push(TokenTree::Punct(Punct::new('&', Spacing::Alone)));
 				render_group(tokens, Delimiter::Bracket, |tokens| {
@@ -460,18 +493,6 @@ fn render_reflection(tokens: &mut Vec<TokenTree>, name: &Ident, constants: &[Con
 					}
 				});
 			});
-			render_string(tokens, "const fn _is_defined(&self) -> bool");
-			render_group(tokens, Delimiter::Brace, |tokens| {
-				render_string(tokens, "match self");
-				render_group(tokens, Delimiter::Brace, |tokens| {
-					for constant in constants {
-						render_string(tokens, "&Self::");
-						tokens.push(TokenTree::Ident(constant.key.clone()));
-						render_string(tokens, "=> true,");
-					}
-					render_string(tokens, "_ => false,");
-				});
-			});
 		});
 	}
 	if derives.debug {
@@ -483,16 +504,26 @@ fn render_reflection(tokens: &mut Vec<TokenTree>, name: &Ident, constants: &[Con
 			}
 		}");
 	}
+	if derives.display {
+		render_string(tokens, "impl ::core::fmt::Display for");
+		tokens.push(TokenTree::Ident(name.clone()));
+		render_group(tokens, Delimiter::Brace, |tokens| {
+			render_string(tokens, "fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+				if let Some(s) = self._str() { s.fmt(f) }
+				else { self.0.fmt(f) }
+			}");
+		})
+	}
 	if derives.from_str {
 		render_string(tokens, "impl ::core::str::FromStr for");
 		tokens.push(TokenTree::Ident(name.clone()));
 		render_group(tokens, Delimiter::Brace, |tokens| {
 			render_string(tokens, "type Err = ::core::num::ParseIntError;");
 			render_string(tokens, "fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {
-				let keys = Self::_keys();
+				let names = Self::_names();
 				let values = Self::_values();
-				for i in 0..keys.len() {
-					if keys[i] == s {
+				for i in 0..names.len() {
+					if names[i] == s {
 						return Ok(values[i]);
 					}
 				}

@@ -53,14 +53,14 @@ static_assert!(Autoincrement2::F, 6);
 
 #[test]
 fn autoincrement2() {
-	assert_eq!(Autoincrement2::_keys(), &["A", "B", "C", "D", "E", "F"]);
+	assert_eq!(Autoincrement2::_names(), &["A", "B", "C", "D", "E", "F"]);
 	assert_eq!(Autoincrement2::_values(), &[Autoincrement2::A, Autoincrement2::B, Autoincrement2::C, Autoincrement2::D, Autoincrement2::E, Autoincrement2::F]);
 }
 
 // Attributes on constants
 
 #[named_constants]
-#[derive(Copy, Clone, Eq, PartialEq, Reflection, Debug, FromStr,)]
+#[derive(Copy, Clone, Eq, PartialEq, Display, Reflection, Debug, FromStr,)]
 #[repr(u32)]
 pub enum ConstantAttributes {
 	/// Doc comment
@@ -72,7 +72,7 @@ pub enum ConstantAttributes {
 
 #[test]
 fn constant_attributes() {
-	assert_eq!(ConstantAttributes::_keys(), &["RED", "GREEN", "BLUE"]);
+	assert_eq!(ConstantAttributes::_names(), &["RED", "GREEN", "BLUE"]);
 	assert_eq!(ConstantAttributes::_values(), &[ConstantAttributes::RED, ConstantAttributes::GREEN, ConstantAttributes::BLUE]);
 	assert_eq!("RED".parse::<ConstantAttributes>(), Ok(ConstantAttributes::RED));
 	assert_eq!("121212".parse::<ConstantAttributes>(), Ok(ConstantAttributes(121212)));
